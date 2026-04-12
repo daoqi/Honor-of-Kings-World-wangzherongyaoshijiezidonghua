@@ -20,13 +20,13 @@ jobs:
       with:
         python-version: '3.12'
     - name: 安装依赖
-      run: pip install pyinstaller opencv-python numpy pyautogui pywin32 PyQt5 keyboard mss
+      run: pip install pyinstaller opencv-python numpy pyautogui pywin32 PyQt5 keyboard mss pillow pyperclip
     - name: 写入版本号
       run: python run_write_version.py
       env:
         VERSION: ${{ github.ref_name }}
     - name: PyInstaller 打包
-      run: pyinstaller --onefile --windowed --add-data "images;images" --add-data "logo.ico;." --name "王者荣耀世界助手" --icon logo.ico wangzherongyaoshijie.py
+      run: pyinstaller --onefile --windowed --add-data "images;images" --add-data "images_fishing;images_fishing" --add-data "logo.ico;." --hidden-import=PIL --hidden-import=PIL.ImageGrab --name "王者荣耀世界助手" --icon logo.ico wangzherongyaoshijie.py
     - name: 发布 Release
       uses: softprops/action-gh-release@v1
       with:
