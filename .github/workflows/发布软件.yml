@@ -1,0 +1,36 @@
+﻿name: 发布新版本
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: 'recursive'
+    - name: 设置 Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: 安装依赖
+      run: pip install pyinstaller opencv-python numpy pyautogui pywin32 PyQt5 keyboard mss
+    - name: 写入版本号
+      run: python run_write_version.py
+      env:
+        VERSION: ${{ github.ref_name }}
+    - name: PyInstaller 打包
+      run: pyinstaller --onefile --windowed --add-data "images;images" --add-data "logo.ico;." --name "王者荣耀世界助手" --icon logo.ico wangzherongyaoshijie.py
+    - name: 发布 Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/王者荣耀世界助手.exe
+        body_path: 版本描述.md
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
