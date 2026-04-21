@@ -1,7 +1,4 @@
-﻿name: 发布新版本
-
-permissions:
-  contents: write
+﻿name: 发布
 
 on:
   push:
@@ -12,68 +9,38 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: 设置 Python 3.10
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-    - name: 安装依赖
-      run: |
-        pip install --upgrade pip
-        pip install -i https://pypi.tuna.tsinghua.edu.cn/simple pyinstaller opencv-python numpy pyautogui pywin32 PyQt5 keyboard mss pillow pyperclip ultralytics
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install pyinstaller torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install ultralytics PyQt5 pywin32 opencv-python pillow keyboard pyperclip mss pyautogui
 
-    - name: 写入版本号
-      run: python run_write_version.py
-      env:
-        VERSION: ${{ github.ref_name }}
+      - name: 修复 main.py 导入顺序（避免 DLL 冲突）
+        run: |
+          $content = Get-Content main.py -Raw
+          $new = "import torch`nimport sys`nsys.modules['onnx'] = None`nsys.modules['onnxruntime'] = None`nsys.modules['onnxslim'] = None`n" + $content
+          $new | Set-Content main.py -Encoding UTF8
 
-    - name: PyInstaller 打包
-      run: pyinstaller --onedir --windowed --add-data "images;images" --add-data "mode;mode" --add-data "core;core" --add-data "fishing;fishing" --add-data "ui;ui" --add-data "utils;utils" --add-data "logo.ico;." --add-data "version.py;." --hidden-import PIL --hidden-import PIL.ImageGrab --hidden-import mss --hidden-import cv2 --hidden-import numpy --hidden-import ultralytics --collect-all torch --collect-all ultralytics --exclude-module onnx --exclude-module onnxruntime --exclude-module tensorboard --name "HOKAI" --icon logo.ico main.py
+      - name: 写入版本号
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          "version = `"$ver`"" | Out-File version.py -Encoding UTF8
 
-    - name: 下载并安装 Inno Setup
-      run: |
-        $innoUrl = "https://jrsoftware.org/download.php/is.exe"
-        Invoke-WebRequest -Uri $innoUrl -OutFile is.exe
-        Start-Process -FilePath .\is.exe -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait
+      - name: PyInstaller 打包（单文件）
+        run: |
+          pyinstaller --onefile --windowed --name HOKAI --icon logo.ico --collect-all torch --collect-all ultralytics --exclude-module onnx --exclude-module onnxruntime --exclude-module tensorboard main.py
 
-    - name: 生成 Inno Setup 脚本
-      run: |
-        $version = "${{ github.ref_name }}".TrimStart('v')
-        $issContent = @"
-[Setup]
-AppName=HOKAI
-AppVersion=$version
-DefaultDirName={pf}\HOKAI
-DefaultGroupName=HOKAI
-UninstallDisplayIcon={app}\HOKAI.exe
-Compression=lzma2
-SolidCompression=yes
-OutputDir=installer
-OutputBaseFilename=HOKAI_Setup_v$version
-
-[Files]
-Source: "dist\HOKAI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-[Icons]
-Name: "{group}\HOKAI"; Filename: "{app}\HOKAI.exe"
-Name: "{autodesktop}\HOKAI"; Filename: "{app}\HOKAI.exe"
-
-[Run]
-Filename: "{app}\HOKAI.exe"; Description: "运行 HOKAI"; Flags: postinstall nowait skipifsilent
-"@
-        $issContent | Out-File -FilePath setup.iss -Encoding UTF8
-
-    - name: 编译安装包
-      run: |
-        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" setup.iss
-
-    - name: 发布 Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: installer/HOKAI_Setup_v${{ github.ref_name }}.exe
-        body_path: 版本描述.md
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 上传 exe 到 Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/HOKAI.exe
+          body: "自动打包版本 ${{ github.ref_name }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
