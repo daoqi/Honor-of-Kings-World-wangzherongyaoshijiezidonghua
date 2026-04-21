@@ -12,7 +12,8 @@ from PIL import ImageGrab
 from ultralytics import YOLO
 from PyQt5.QtCore import QThread, pyqtSignal
 import os
-
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 def get_project_root():
     """获取项目根目录（HOKAI）"""
     # 当前文件在 D:\Github\HOKAI\fishing\fishing_thread.py

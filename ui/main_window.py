@@ -20,7 +20,8 @@ from ui.ai_display import AIDisplayWindow
 from ui.game_log import GameLogOverlay
 from utils.helpers import get_path
 from utils.version_utils import get_current_version
-
+from utils.auto_updater import AutoUpdater
+from version import version
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -51,7 +52,9 @@ class MainWindow(QMainWindow):
 
         self.log("程序启动，请选择游戏窗口后启动AI钓鱼或任务。")
         self.log("获取最新AI版本加入QQ群1098948146")
+        self.check_for_updates()   # 自动更新检查
 
+    # ==================== UI 构建 ====================
     def setup_ui(self):
         self.setStyleSheet("""
             QMainWindow { background-color: #050a15; }
@@ -281,7 +284,7 @@ class MainWindow(QMainWindow):
         layout_fishing.addWidget(stats_group)
         layout_fishing.addStretch()
 
-    # ------------------------------- 任务相关方法 -------------------------------
+    # ==================== 任务相关方法 ====================
     def on_tracking_toggled(self, checked):
         if self.automation_thread:
             self.automation_thread.tracking_enabled.emit(checked)
@@ -378,7 +381,7 @@ class MainWindow(QMainWindow):
         if rect and self.automation_active and self.show_game_log:
             self.game_log.update_position(rect)
 
-    # ------------------------------- AI 钓鱼相关 -------------------------------
+    # ==================== AI 钓鱼相关 ====================
     def refresh_window_list(self):
         self.window_combo.clear()
 
@@ -478,7 +481,7 @@ class MainWindow(QMainWindow):
             self.fishing_thread.set_display_enabled(False)
         self.ai_display_window = None
 
-    # ------------------------------- 全局控制 -------------------------------
+    # ==================== 全局控制 ====================
     def toggle_automation(self):
         now = time.time()
         if hasattr(self, '_last_auto_time') and now - self._last_auto_time < 0.5:
@@ -514,7 +517,7 @@ class MainWindow(QMainWindow):
         else:
             self.log("没有正在运行的功能")
 
-    # ------------------------------- 热键 -------------------------------
+    # ==================== 热键 ====================
     def setup_hotkeys(self):
         try:
             keyboard.add_hotkey('alt+f12', self.toggle_automation)
@@ -541,7 +544,7 @@ class MainWindow(QMainWindow):
     def toggle_ai_auto(self):
         self.ai_enable_cb.setChecked(not self.ai_enable_cb.isChecked())
 
-    # ------------------------------- 辅助 -------------------------------
+    # ==================== 辅助功能 ====================
     def browse_custom_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择消息文件", "", "文本文件 (*.txt)")
         if path:
@@ -595,38 +598,37 @@ class MainWindow(QMainWindow):
         url = "https://qm.qq.com/q/1dbk294PM8"
         QDesktopServices.openUrl(QUrl(url))
 
+    # ==================== 自动更新（使用 AutoUpdater） ====================
     def check_for_updates(self):
+        """检查 GitHub 是否有新版本"""
         self.log("正在检查更新...")
-        self.update_manager = QNetworkAccessManager()
-        self.update_manager.finished.connect(self.on_update_response)
-        url = QUrl("https://api.github.com/repos/daoqi/Honor-of-Kings-World-wangzherongyaoshijiezidonghua/releases/latest")
-        request = QNetworkRequest(url)
-        request.setHeader(QNetworkRequest.UserAgentHeader, "Mozilla/5.0")
-        self.update_manager.get(request)
+        self.updater = AutoUpdater(version)
+        self.updater.update_available.connect(self.on_update_available)
+        self.updater.check_finished.connect(self.on_update_not_available)
+        self.updater.error_occurred.connect(self.on_update_error)
+        self.updater.check_for_updates()
 
-    def on_update_response(self, reply):
-        if reply.error() != QNetworkReply.NoError:
-            self.log(f"检查更新失败: {reply.errorString()}")
-            reply.deleteLater()
-            return
-        data = reply.readAll().data().decode('utf-8')
-        reply.deleteLater()
-        try:
-            info = json.loads(data)
-            tag = info.get("tag_name", "").lstrip('v')
-            release_url = info.get("html_url", "")
-            current = get_current_version()
-            if tag > current:
-                reply_box = QMessageBox.question(self, "发现新版本",
-                                                 f"当前版本: {current}\n最新版本: {tag}\n\n是否前往下载？",
-                                                 QMessageBox.Yes | QMessageBox.No)
-                if reply_box == QMessageBox.Yes:
-                    QDesktopServices.openUrl(QUrl(release_url))
-            else:
-                QMessageBox.information(self, "检查更新", f"当前已是最新版本 ({current})")
-        except Exception as e:
-            self.log(f"解析更新信息失败: {e}")
+    def on_update_available(self, new_version, download_url):
+        """发现新版本时弹出询问对话框"""
+        reply = QMessageBox.question(
+            self,
+            "发现新版本",
+            f"当前版本 v{version}\n最新版本 v{new_version}\n\n是否前往下载更新？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            import webbrowser
+            webbrowser.open(download_url)
 
+    def on_update_not_available(self):
+        """当前已是最新版本，静默处理"""
+        self.log("当前已是最新版本")
+
+    def on_update_error(self, error_msg):
+        """更新检查出错时记录错误"""
+        self.log(f"更新检查失败: {error_msg}")
+
+    # ==================== 窗口关闭事件 ====================
     def closeEvent(self, event):
         self.stop_automation()
         if self.fishing_thread:
