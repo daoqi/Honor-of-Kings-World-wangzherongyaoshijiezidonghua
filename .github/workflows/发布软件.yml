@@ -30,30 +30,9 @@ jobs:
       env:
         VERSION: ${{ github.ref_name }}
 
-    - name: PyInstaller 打包（--onedir 模式）
+    - name: PyInstaller 打包
       run: |
-        pyinstaller --onedir --windowed `
-          --add-data "images;images" `
-          --add-data "mode;mode" `
-          --add-data "core;core" `
-          --add-data "fishing;fishing" `
-          --add-data "ui;ui" `
-          --add-data "utils;utils" `
-          --add-data "logo.ico;." `
-          --add-data "version.py;." `
-          --hidden-import PIL `
-          --hidden-import PIL.ImageGrab `
-          --hidden-import mss `
-          --hidden-import cv2 `
-          --hidden-import numpy `
-          --hidden-import ultralytics `
-          --collect-all torch `
-          --collect-all ultralytics `
-          --exclude-module onnx `
-          --exclude-module onnxruntime `
-          --exclude-module tensorboard `
-          --name "HOKAI" `
-          --icon logo.ico main.py
+        pyinstaller --onedir --windowed --add-data "images;images" --add-data "mode;mode" --add-data "core;core" --add-data "fishing;fishing" --add-data "ui;ui" --add-data "utils;utils" --add-data "logo.ico;." --add-data "version.py;." --hidden-import PIL --hidden-import PIL.ImageGrab --hidden-import mss --hidden-import cv2 --hidden-import numpy --hidden-import ultralytics --collect-all torch --collect-all ultralytics --exclude-module onnx --exclude-module onnxruntime --exclude-module tensorboard --name "HOKAI" --icon logo.ico main.py
 
     - name: 下载并安装 Inno Setup
       run: |
@@ -61,7 +40,7 @@ jobs:
         Invoke-WebRequest -Uri $innoUrl -OutFile is.exe
         Start-Process -FilePath .\is.exe -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait
 
-    - name: 生成 Inno Setup 脚本（动态版本号）
+    - name: 生成 Inno Setup 脚本
       run: |
         $version = "${{ github.ref_name }}".TrimStart('v')
         $issContent = @"
