@@ -1,0 +1,9 @@
+venv_clean/
+.venv/
+venv310/
+__pycache__/
+*.pyc
+dist/
+build/
+*.spec
+.idea/
