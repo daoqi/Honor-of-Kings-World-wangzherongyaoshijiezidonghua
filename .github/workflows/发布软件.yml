@@ -67,7 +67,8 @@ Filename: "{app}\HOKAI.exe"; Description: "运行 HOKAI"; Flags: postinstall now
         $issContent | Out-File -FilePath setup.iss -Encoding UTF8
 
     - name: 编译安装包
-      run: '& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" setup.iss'
+      run: |
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" setup.iss
 
     - name: 发布 Release
       uses: softprops/action-gh-release@v1
