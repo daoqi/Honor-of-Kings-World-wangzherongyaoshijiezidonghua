@@ -1,0 +1,61 @@
+name: 发布新版本
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install torch==2.5.0 torchvision==0.20.0 torchaudio==2.5.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install ultralytics PyQt5 pywin32 opencv-python pillow keyboard pyperclip mss pyautogui pyinstaller
+
+      - name: 修复 main.py 导入顺序
+        run: |
+          $content = Get-Content main.py -Raw
+          $newContent = "import torch`nimport sys`nsys.modules['onnx'] = None`nsys.modules['onnxruntime'] = None`nsys.modules['onnxslim'] = None`n`n" + $content
+          $newContent | Set-Content main.py -Encoding UTF8
+
+      - name: 写入版本号
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          "version = `"$ver`"" | Out-File version.py -Encoding UTF8
+
+      - name: PyInstaller 打包
+        run: |
+          pyinstaller --onefile --windowed --name "HOK world AI" --icon logo.ico `
+            --add-data "mode/best.pt;mode" `
+            --add-data "core;core" `
+            --add-data "fishing;fishing" `
+            --add-data "ui;ui" `
+            --add-data "utils;utils" `
+            --add-data "version.py;." `
+            --collect-all torch `
+            --collect-all ultralytics `
+            --exclude-module onnx `
+            --exclude-module onnxruntime `
+            --exclude-module tensorboard `
+            main.py
+
+      - name: 上传 exe 到 Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/HOK world AI.exe
+          body: "自动打包版本 ${{ github.ref_name }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
