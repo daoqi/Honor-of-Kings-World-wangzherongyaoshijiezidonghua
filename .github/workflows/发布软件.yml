@@ -30,8 +30,6 @@ jobs:
       env:
         VERSION: ${{ github.ref_name }}
 
-    # 注意：不再需要“修改 main.py 导入顺序”步骤，因为你的 main.py 已正确导入 torch 并屏蔽 onnx
-
     - name: PyInstaller 打包（--onedir 模式）
       run: |
         pyinstaller --onedir --windowed `
@@ -43,7 +41,6 @@ jobs:
           --add-data "utils;utils" `
           --add-data "logo.ico;." `
           --add-data "version.py;." `
-          --add-data "config.py;." `
           --hidden-import PIL `
           --hidden-import PIL.ImageGrab `
           --hidden-import mss `
