@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
+# 必须最先导入 torch 和 ultralytics，避免 DLL 冲突
 import torch
+import ultralytics
+
 import sys
 import time
 import random
@@ -13,11 +16,13 @@ from ultralytics import YOLO
 from PyQt5.QtCore import QThread, pyqtSignal
 import os
 import ssl
+
+# 临时禁用 SSL 证书验证（避免 ultralytics 下载模型时的证书问题）
 ssl._create_default_https_context = ssl._create_unverified_context
+
+# ------------------------------- 资源路径 -------------------------------
 def get_project_root():
-    """获取项目根目录（HOKAI）"""
-    # 当前文件在 D:\Github\HOKAI\fishing\fishing_thread.py
-    # 向上两级到达项目根目录
+    """获取项目根目录（HOKAI 文件夹）"""
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def get_path(relative_path):
@@ -28,10 +33,10 @@ def get_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 MODEL_PATH = get_path(os.path.join("mode", "best.pt"))
-CAST_ROD_CONF = 0.55
+CAST_ROD_CONF = 0.35
 REFRESH_MS = 150
-KEY_PRESS_DURATION = 0.015
-CLICK_DURATION = 0.03
+KEY_PRESS_DURATION = 0.01      # 按键持续时间 10ms
+CLICK_DURATION = 0.02
 
 COOLDOWN = {
     "cast": 0.5,
@@ -41,6 +46,7 @@ COOLDOWN = {
     "rapid_action": 0.8,
 }
 
+# ------------------------------- 辅助函数 -------------------------------
 def click_left(x=None, y=None):
     if x is None or y is None:
         x, y = win32api.GetSystemMetrics(0)//2, win32api.GetSystemMetrics(1)//2
@@ -60,8 +66,9 @@ def press_key(key):
 def press_key_multiple(key, times):
     for _ in range(times):
         press_key(key)
-        time.sleep(0.01)
+        time.sleep(0.005)   # 按键间隔 5ms
 
+# ------------------------------- AI 钓鱼线程 -------------------------------
 class FishingThread(QThread):
     log_signal = pyqtSignal(str)
     fish_count_signal = pyqtSignal(int)
@@ -80,22 +87,20 @@ class FishingThread(QThread):
         self.last_action = {}
         self.fish_count = 0
 
+        # 状态标志
         self.is_fishing = False
-        self.waiting_exp = False
-        self.exp_counted = False
-        self.last_pull_time = 0
-        self.waiting_exp_start = 0
-        self.exp_timeout = 2.0
         self.big_fish_mode = False
         self.struggle_start_time = 0
-        self.struggle_min_duration = 3.0
         self.last_struggle_action_time = 0
-        self.last_cast_time = 0
         self.cast_start_time = 0
-        self.cast_timeout = 15.0
+        self.cast_timeout = 30.0
+        self.last_wait_log_time = 0
 
-        self.global_conf = 0.6
-        self.timeout_reset = 45
+        # 强制抛竿计时
+        self.stand_detected_time = 0
+        self.force_cast_timeout = 3.0
+
+        self.global_conf = 0.6   # 推荐阈值 0.6 以上
 
     def set_game_window(self, hwnd):
         if not hwnd:
@@ -137,27 +142,20 @@ class FishingThread(QThread):
             return True
         return False
 
-    def perform_random_struggle_action(self):
-        actions = [
-            ('press_w', lambda: press_key_multiple('w', random.randint(5, 8)), 1),
-            ('press_s', lambda: press_key_multiple('s', random.randint(5, 8)), 1),
-            ('press_a', lambda: press_key_multiple('a', random.randint(5, 8)), 1),
-            ('press_d', lambda: press_key_multiple('d', random.randint(5, 8)), 1),
-            ('rapid_d', lambda: press_key_multiple('d', random.randint(5, 8)), 2),
-            ('rapid_a', lambda: press_key_multiple('a', random.randint(5, 8)), 2),
-            ('press_f', lambda: self._do_press_f(), 1),
-        ]
-        total_weight = sum(w for _, _, w in actions)
-        r = random.uniform(0, total_weight)
-        cum = 0
-        for name, func, w in actions:
-            cum += w
-            if r <= cum:
-                self.log_signal.emit(f"挣扎动作: {name}")
-                func()
-                break
-
-    def _do_press_f(self):
+    def perform_struggle_actions(self):
+        """连续执行所有挣扎动作，无等待或极短等待"""
+        self.log_signal.emit("挣扎动作: press_w (5-8次)")
+        press_key_multiple('w', random.randint(5, 8))
+        self.log_signal.emit("挣扎动作: press_s (5-8次)")
+        press_key_multiple('s', random.randint(5, 8))
+        self.log_signal.emit("挣扎动作: press_a (5-8次)")
+        press_key_multiple('a', random.randint(5, 8))
+        self.log_signal.emit("挣扎动作: press_d (5-8次)")
+        press_key_multiple('d', random.randint(5, 8))
+        key = random.choice(['d', 'a'])
+        self.log_signal.emit(f"挣扎动作: rapid_{key} (5-8次)")
+        press_key_multiple(key, random.randint(5, 8))
+        self.log_signal.emit("挣扎动作: press_f")
         press_key('f')
         cx, cy = win32api.GetSystemMetrics(0)//2, win32api.GetSystemMetrics(1)//2
         ox, oy = random.randint(-50,50), random.randint(-50,50)
@@ -166,20 +164,6 @@ class FishingThread(QThread):
     def process_detections(self, results):
         if not self.ai_enabled:
             return
-
-        if self.waiting_exp and (time.time() - self.last_pull_time) > self.timeout_reset:
-            self.log_signal.emit("超时未检测到经验，强制重置状态")
-            self.waiting_exp = False
-            self.exp_counted = False
-            self.is_fishing = False
-            self.big_fish_mode = False
-
-        if self.is_fishing and not self.big_fish_mode and not self.waiting_exp:
-            if time.time() - self.cast_start_time > self.cast_timeout:
-                self.log_signal.emit("抛竿超时（15秒无鱼），重置状态")
-                self.is_fishing = False
-                self.waiting_exp = False
-                self.big_fish_mode = False
 
         try:
             labels_confs = []
@@ -190,18 +174,51 @@ class FishingThread(QThread):
                     label = self.model.names[cls_id]
                     labels_confs.append((label, conf))
 
-            if not self.is_fishing and not self.waiting_exp and not self.big_fish_mode:
-                has_fishing_stand = any(l == 'fishing_stand' for l, _ in labels_confs)
-                has_cast_rod_high = any(l == 'cast_rod' and conf >= CAST_ROD_CONF for l, conf in labels_confs)
-                if has_fishing_stand and has_cast_rod_high:
+            has_fishing_stand = any(l == 'fishing_stand' for l, _ in labels_confs)
+            cast_rod_conf = max([conf for l, conf in labels_confs if l == 'cast_rod'], default=0.0)
+
+            # 抛竿阶段（非钓鱼、非挣扎状态）
+            if not self.is_fishing and not self.big_fish_mode:
+                normal_cast = True
+                if has_fishing_stand:
+                    if self.stand_detected_time == 0:
+                        self.stand_detected_time = time.time()
+                    elif (time.time() - self.stand_detected_time) > self.force_cast_timeout:
+                        self.log_signal.emit(f"钓鱼架出现超过{self.force_cast_timeout}秒未抛竿，强制抛竿")
+                        if self.can_act("cast", COOLDOWN["cast"]):
+                            click_left()
+                            self.is_fishing = True
+                            self.cast_start_time = time.time()
+                            self.stand_detected_time = 0
+                            self.last_wait_log_time = time.time()
+                            self.log_signal.emit("抛竿，等待鱼上钩...")
+                        normal_cast = False
+                else:
+                    self.stand_detected_time = 0
+
+                if normal_cast and has_fishing_stand and cast_rod_conf >= CAST_ROD_CONF:
                     if self.can_act("cast", COOLDOWN["cast"]):
-                        self.log_signal.emit("抛竿")
+                        self.log_signal.emit(f"抛竿 (cast_rod置信度{cast_rod_conf:.2f})")
                         click_left()
                         self.is_fishing = True
-                        self.last_cast_time = time.time()
                         self.cast_start_time = time.time()
+                        self.stand_detected_time = 0
+                        self.last_wait_log_time = time.time()
+                        self.log_signal.emit("抛竿，等待鱼上钩...")
 
+            # 钓鱼中等待鱼上钩
             if self.is_fishing and not self.big_fish_mode:
+                now = time.time()
+                if now - self.last_wait_log_time > 5:
+                    self.log_signal.emit("等待鱼上钩...")
+                    self.last_wait_log_time = now
+
+                if now - self.cast_start_time > self.cast_timeout:
+                    self.log_signal.emit("抛竿超时（30秒无鱼），重置状态")
+                    self.is_fishing = False
+                    self.stand_detected_time = 0
+
+                # 鱼上钩检测
                 if any(l == 'fish_on_hook' for l, _ in labels_confs):
                     has_fish_bite = any(l == 'fish_bite' for l, _ in labels_confs)
                     has_struggle_tags = any(l in ('rapid_d', 'rapid_a', 'press_w', 'press_s', 'press_a', 'press_d') for l, _ in labels_confs)
@@ -210,57 +227,51 @@ class FishingThread(QThread):
                             self.log_signal.emit("小鱼上钩，直接拉杆")
                             click_left()
                             self.is_fishing = False
-                            self.waiting_exp = True
-                            self.last_pull_time = time.time()
-                            self.waiting_exp_start = time.time()
+                            self.fish_count += 1
+                            self.fish_count_signal.emit(self.fish_count)
+                            self.log_signal.emit(f"钓鱼成功！总鱼获次数: {self.fish_count}")
+                            self.stand_detected_time = 0
                     else:
                         self.log_signal.emit("大鱼上钩，进入挣扎循环")
                         self.big_fish_mode = True
                         self.struggle_start_time = time.time()
                         self.last_struggle_action_time = 0
-                        self.perform_random_struggle_action()
+                        self.perform_struggle_actions()  # 立即执行一次
 
+            # 大鱼挣扎循环（每0.1秒执行一次全套动作）
             if self.big_fish_mode:
                 now = time.time()
-                end_condition = any(l in ('fishing_stand', 'exp') for l, _ in labels_confs)
-                if end_condition and (now - self.struggle_start_time >= self.struggle_min_duration):
-                    self.log_signal.emit("挣扎结束，回到钓鱼界面或获得经验")
-                    self.big_fish_mode = False
-                    self.is_fishing = False
-                    self.waiting_exp = False
-                    self.exp_counted = False
-                    self.fish_count += 1
-                    self.fish_count_signal.emit(self.fish_count)
-                    self.log_signal.emit(f"钓鱼成功！总鱼获次数: {self.fish_count}")
-                    return
-
-                if now - self.last_struggle_action_time >= 0.3:
-                    self.last_struggle_action_time = now
-                    self.perform_random_struggle_action()
-
-                if now - self.struggle_start_time > 30:
-                    self.log_signal.emit("挣扎超时（30秒），强制结束")
-                    self.big_fish_mode = False
-                    self.is_fishing = False
-                    self.waiting_exp = False
-
-            if self.waiting_exp and not self.exp_counted:
-                if any(l == 'exp' for l, _ in labels_confs):
-                    if self.can_act("exp", 0.5):
+                if any(l in ('fishing_stand', 'exp') for l, _ in labels_confs):
+                    if now - self.struggle_start_time >= 3.0:
+                        self.log_signal.emit("挣扎结束，回到钓鱼界面或获得经验")
+                        self.big_fish_mode = False
+                        self.is_fishing = False
                         self.fish_count += 1
                         self.fish_count_signal.emit(self.fish_count)
                         self.log_signal.emit(f"钓鱼成功！总鱼获次数: {self.fish_count}")
-                        self.exp_counted = True
-                        self.waiting_exp = False
-                elif time.time() - self.waiting_exp_start > self.exp_timeout:
-                    self.log_signal.emit("等待经验超时，强制增加鱼获计数")
-                    self.fish_count += 1
-                    self.fish_count_signal.emit(self.fish_count)
-                    self.log_signal.emit(f"钓鱼成功！总鱼获次数: {self.fish_count}")
-                    self.exp_counted = True
-                    self.waiting_exp = False
+                        self.stand_detected_time = 0
+                        return
+                else:
+                    if now - self.last_struggle_action_time >= 0.1:   # 0.1秒间隔
+                        self.last_struggle_action_time = now
+                        self.perform_struggle_actions()
+                    if now - self.struggle_start_time > 30:
+                        self.log_signal.emit("挣扎超时（30秒），强制结束")
+                        self.big_fish_mode = False
+                        self.is_fishing = False
+                        self.stand_detected_time = 0
 
-            if not self.big_fish_mode and not self.waiting_exp and not self.is_fishing:
+            # 通用按 F 键处理
+            if any(l == 'press_f' for l,_ in labels_confs):
+                if self.can_act("press_f", COOLDOWN["press_f"]):
+                    self.log_signal.emit("按 F 键并点击中心")
+                    press_key('f')
+                    cx, cy = win32api.GetSystemMetrics(0)//2, win32api.GetSystemMetrics(1)//2
+                    ox, oy = random.randint(-50,50), random.randint(-50,50)
+                    click_left(cx+ox, cy+oy)
+
+            # 非钓鱼状态下的快速按键
+            if not self.is_fishing and not self.big_fish_mode:
                 has_rapid_d = any(l == 'rapid_d' for l, _ in labels_confs)
                 has_rapid_a = any(l == 'rapid_a' for l, _ in labels_confs)
                 if has_rapid_d or has_rapid_a:
@@ -274,14 +285,6 @@ class FishingThread(QThread):
                         times = random.randint(5, 8)
                         self.log_signal.emit(f"快速按键 {key} {times} 次")
                         press_key_multiple(key, times)
-
-                if any(l == 'press_f' for l,_ in labels_confs):
-                    if self.can_act("press_f", COOLDOWN["press_f"]):
-                        self.log_signal.emit("按 F 键并点击中心")
-                        press_key('f')
-                        cx, cy = win32api.GetSystemMetrics(0)//2, win32api.GetSystemMetrics(1)//2
-                        ox, oy = random.randint(-50,50), random.randint(-50,50)
-                        click_left(cx+ox, cy+oy)
 
         except Exception as e:
             self.log_signal.emit(f"处理检测结果异常: {e}")
@@ -328,20 +331,16 @@ class FishingThread(QThread):
         self.log_signal.emit(f"AI检测{'已启动' if enabled else '已停止'}")
         if not enabled:
             self.is_fishing = False
-            self.waiting_exp = False
-            self.exp_counted = False
-            self.last_pull_time = 0
             self.big_fish_mode = False
+            self.stand_detected_time = 0
 
     def set_ai_enabled(self, enabled):
         self.ai_enabled = enabled
         self.log_signal.emit(f"AI自动操作{'已启用' if enabled else '已禁用'}")
         if not enabled:
             self.is_fishing = False
-            self.waiting_exp = False
-            self.exp_counted = False
-            self.last_pull_time = 0
             self.big_fish_mode = False
+            self.stand_detected_time = 0
 
     def set_display_enabled(self, enabled):
         self.display_enabled = enabled
